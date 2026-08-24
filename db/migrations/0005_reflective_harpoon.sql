@@ -16,4 +16,4 @@ SET cc.`status` = 'closed', cc.`closed_at` = COALESCE(cc.`closed_at`, NOW())
 WHERE cc.`status` = 'active' AND acc.`context_id` IS NULL;--> statement-breakpoint
 ALTER TABLE `active_consultation_contexts` ADD CONSTRAINT `active_consultation_contexts_tenant_id_tenants_id_fk` FOREIGN KEY (`tenant_id`) REFERENCES `tenants`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `active_consultation_contexts` ADD CONSTRAINT `active_consultation_contexts_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE `active_consultation_contexts` ADD CONSTRAINT `active_consultation_contexts_context_id_consultation_contexts_id_fk` FOREIGN KEY (`context_id`) REFERENCES `consultation_contexts`(`id`) ON DELETE cascade ON UPDATE no action;
+ALTER TABLE `active_consultation_contexts` ADD CONSTRAINT `acc_context_id_fk` FOREIGN KEY (`context_id`) REFERENCES `consultation_contexts`(`id`) ON DELETE cascade ON UPDATE no action;

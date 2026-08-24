@@ -1,0 +1,1 @@
+ALTER TABLE `consultation_entries` ADD `stage_timings` json;

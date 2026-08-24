@@ -1,10 +1,13 @@
 :root {
-  --color-ink: #1b2b3d;
-  --color-muted: #7e8d9b;
-  --color-line: #e6ebef;
-  --color-sidebar: #142e4a;
-  --color-action: #1f527e;
-  --color-brand: #bf914b;
+  --color-ink: #17324d;
+  --color-muted: #6f8498;
+  --color-line: #d8e7f4;
+  --color-sidebar: #0d47a1;
+  --color-action: #1769e8;
+  --color-brand: #1769e8;
+  --color-cyan: #00a8c7;
+  --color-surface: #ffffff;
+  --color-page: #eef7ff;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;

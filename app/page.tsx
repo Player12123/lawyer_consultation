@@ -1,21 +1,50 @@
 /* eslint-disable jsx-a11y/no-autofocus */
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import { clientBrand } from "@/features/brand/client-brand";
+import { formatElapsedDuration } from "@/features/consultation/elapsed.mjs";
 
 type LegalReference = { name: string; article: string; text: string; region?: string; score?: number };
-type CaseReference = { keyword?: string; fact_summary: string; assessment_conclusion?: string; law_refs?: string[]; score?: number };
-type Message = { id?: string; role: "user" | "assistant"; content: string; time: string; contextId?: string; laws?: LegalReference[]; cases?: CaseReference[] };
+type CaseReference = { keyword?: string; fact_summary: string; assessment_conclusion?: string; assessment_reasoning?: string; risk_notes?: string; action_steps?: string[]; law_refs?: string[]; score?: number };
+type Message = { id?: string; role: "user" | "assistant"; content: string; time: string; timestamp?: string; contextId?: string; elapsedMs?: number; laws?: LegalReference[]; cases?: CaseReference[] };
 type ConsultationEntry = { id: string; contextId: string; question: string; answer: string; businessType: string; status: "processing" | "answered" | "failed"; time: string; matched_laws?: LegalReference[]; matched_cases?: CaseReference[] };
 type Account = { id: string; displayName: string; phone: string; role: "agent" | "group_admin" | "system_admin" };
 type TeamMember = { id: string; name: string; phone: string; role: "agent" | "group_admin" | "system_admin"; status: "active" | "disabled"; groupId?: string | null; groupName: string; lastLoginAt: string | null; consultationCount: number };
 type TeamOverview = { scope: "all" | "group"; canManageRoles: boolean; summary: { total: number; active: number; consultations: number; groups: number }; groups: Array<{ id: string; name: string; status: string; member_count: number }>; businessTypes: Array<{ name: string; count: number }>; users: TeamMember[] };
 type AgentResult = { entryId?: string; answer: string; case_state?: Record<string, unknown>; matched_laws?: LegalReference[]; matched_cases?: CaseReference[] };
+type ConsultationMark = { message: Message; index: number; answer: Message | null; dayKey: string };
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+
+function timelineDayKey(value: string | Date | undefined) {
+  const date = value instanceof Date ? value : new Date(value ?? "");
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function formatTimelineTime(value: string | undefined) {
+  const date = new Date(value ?? "");
+  return Number.isNaN(date.getTime()) ? "刚刚" : date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function formatTimelineDay(dayKey: string) {
+  const today = timelineDayKey(new Date());
+  const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+  if (dayKey === today) return "今天";
+  if (dayKey === timelineDayKey(yesterday)) return "昨天";
+  const [, month, day] = dayKey.split("-");
+  return `${Number(month)}月${Number(day)}日`;
+}
+
+function isWithinTimelineWindow(value: string | undefined) {
+  const date = new Date(value ?? "");
+  if (Number.isNaN(date.getTime())) return true;
+  const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - 6);
+  return date >= start;
+}
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
@@ -28,14 +57,27 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+async function consultationStream(message: string, clientRequestId: string, onEvent: (event: string, data: Record<string, unknown>) => void) {
+  const response = await fetch(`${apiBaseUrl}/api/v1/consultations/stream`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ message, clientRequestId }) });
+  if (!response.ok || !response.body) { const body = await response.json().catch(() => ({})); throw new Error(typeof body.message === "string" ? body.message : "服务暂时不可用，请稍后重试。"); }
+  const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+  const consume = (block: string) => { const event = block.match(/^event:\s*(.+)$/m)?.[1] ?? "message"; const data = block.match(/^data:\s*(.+)$/m)?.[1]; if (!data) return; try { onEvent(event, JSON.parse(data)); } catch { /* Ignore malformed server event. */ } };
+  while (true) { const { value, done } = await reader.read(); buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done }); let index; while ((index = buffer.indexOf("\n\n")) >= 0) { consume(buffer.slice(0, index)); buffer = buffer.slice(index + 2); } if (done) break; }
+}
+
 export default function Home() {
   const [collapsed, setCollapsed] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [historyPreview, setHistoryPreview] = useState<Message[] | null>(null);
   const [historyMessages, setHistoryMessages] = useState<Message[]>([]);
   const [nextHistoryCursor, setNextHistoryCursor] = useState<string | null>(null);
+  const [selectedHistoryEntryId, setSelectedHistoryEntryId] = useState<string | null>(null);
+  const [expandedTimelineDays, setExpandedTimelineDays] = useState<Set<string>>(() => new Set([timelineDayKey(new Date()) ?? ""]));
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [requestStartedAt, setRequestStartedAt] = useState<number | null>(null);
+  const [loadingElapsedMs, setLoadingElapsedMs] = useState(0);
+  const [composerHeight, setComposerHeight] = useState(88);
   const [mainMode, setMainMode] = useState<"full" | "compact" | "icon">("full");
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [settingsOrigin, setSettingsOrigin] = useState<"chat" | "admin">("chat");
@@ -43,13 +85,22 @@ export default function Home() {
   const [account, setAccount] = useState<Account | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
   const chatAreaRef = useRef<HTMLElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
   const accountTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     let cancelled = false;
     api<{ user: Account }>("/api/v1/auth/me", { method: "POST" }).then(({ user }) => {
       if (!cancelled) { setAccount(user); setPage("chat"); }
-    }).catch(() => undefined).finally(() => { if (!cancelled) setAuthChecking(false); });
+    }).catch(() => {
+      if (!cancelled) {
+        setAccount(null);
+        setPage("login");
+        setAuthChecking(false);
+      }
+    }).finally(() => {
+      if (!cancelled) setAuthChecking(false);
+    });
     return () => { cancelled = true; };
   }, []);
 
@@ -58,6 +109,23 @@ export default function Home() {
     window.addEventListener("profile-updated", updateProfile);
     return () => window.removeEventListener("profile-updated", updateProfile);
   }, []);
+
+  useEffect(() => {
+    if (!account) return;
+    const refreshSession = () => api<{ user: Account }>("/api/v1/auth/me", { method: "POST" }).catch(() => {
+      setAccount(null); setPage("login");
+    });
+    const timer = window.setInterval(() => void refreshSession(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [account]);
+
+  useEffect(() => {
+    if (requestStartedAt === null) return;
+    const updateElapsed = () => setLoadingElapsedMs(performance.now() - requestStartedAt);
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1_000);
+    return () => window.clearInterval(timer);
+  }, [requestStartedAt]);
 
   useEffect(() => {
     const element = chatAreaRef.current;
@@ -73,18 +141,26 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const element = conversationRef.current;
+    if (!element) return;
+    const frame = window.requestAnimationFrame(() => element.scrollTo({ top: element.scrollHeight, behavior: "smooth" }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, loading]);
+
+  useEffect(() => {
     if (!account || page === "login") return;
     let cancelled = false;
     api<{ entries: ConsultationEntry[]; activeContextId: string | null; nextCursor: string | null }>("/api/v1/consultations/history", { method: "POST" }).then(({ entries, activeContextId, nextCursor }) => {
       if (cancelled) return;
       const restored = entries.flatMap((entry) => [
-        { id: `${entry.id}:question`, role: "user" as const, content: entry.question, time: new Date(entry.time).toLocaleString("zh-CN", { hour12: false }), contextId: entry.contextId },
-        ...(entry.answer ? [{ id: `${entry.id}:answer`, role: "assistant" as const, content: entry.answer, time: new Date(entry.time).toLocaleString("zh-CN", { hour12: false }), contextId: entry.contextId, laws: entry.matched_laws, cases: entry.matched_cases }] : []),
+        { id: `${entry.id}:question`, role: "user" as const, content: entry.question, time: new Date(entry.time).toLocaleString("zh-CN", { hour12: false }), timestamp: entry.time, contextId: entry.contextId },
+        ...(entry.answer ? [{ id: `${entry.id}:answer`, role: "assistant" as const, content: entry.answer, time: new Date(entry.time).toLocaleString("zh-CN", { hour12: false }), timestamp: entry.time, contextId: entry.contextId, laws: entry.matched_laws, cases: entry.matched_cases }] : []),
       ]);
       setHistoryMessages(restored);
       setMessages(activeContextId ? restored.filter((message) => message.contextId === activeContextId) : []);
       setHistoryPreview(null);
       setNextHistoryCursor(nextCursor);
+      setExpandedTimelineDays(new Set([timelineDayKey(new Date()) ?? ""]));
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [account, page]);
@@ -93,8 +169,8 @@ export default function Home() {
     if (!nextHistoryCursor) return;
     const result = await api<{ entries: ConsultationEntry[]; nextCursor: string | null }>("/api/v1/consultations/history", { method: "POST", body: JSON.stringify({ cursor: nextHistoryCursor }) });
     const older = result.entries.flatMap((entry) => [
-      { id: `${entry.id}:question`, role: "user" as const, content: entry.question, time: new Date(entry.time).toLocaleString("zh-CN", { hour12: false }), contextId: entry.contextId },
-      ...(entry.answer ? [{ id: `${entry.id}:answer`, role: "assistant" as const, content: entry.answer, time: new Date(entry.time).toLocaleString("zh-CN", { hour12: false }), contextId: entry.contextId, laws: entry.matched_laws, cases: entry.matched_cases }] : []),
+      { id: `${entry.id}:question`, role: "user" as const, content: entry.question, time: new Date(entry.time).toLocaleString("zh-CN", { hour12: false }), timestamp: entry.time, contextId: entry.contextId },
+      ...(entry.answer ? [{ id: `${entry.id}:answer`, role: "assistant" as const, content: entry.answer, time: new Date(entry.time).toLocaleString("zh-CN", { hour12: false }), timestamp: entry.time, contextId: entry.contextId, laws: entry.matched_laws, cases: entry.matched_cases }] : []),
     ]);
     setHistoryMessages((current) => [...older, ...current]);
     setNextHistoryCursor(result.nextCursor);
@@ -109,37 +185,92 @@ export default function Home() {
       window.alert(error instanceof Error ? error.message : "暂时无法清空，请稍后重试。");
     }
   }
-  const consultationMarks = historyMessages.flatMap((message, index) => message.role === "user" ? [{ message, index, answer: historyMessages[index + 1]?.role === "assistant" ? historyMessages[index + 1] : null }] : []);
-  function jumpToMark(index: number) {
-    const selected = historyMessages[index];
+  const consultationMarks: ConsultationMark[] = historyMessages.flatMap((message, index) => {
+    const dayKey = timelineDayKey(message.timestamp);
+    return message.role === "user" && dayKey ? [{ message, index, answer: historyMessages[index + 1]?.role === "assistant" ? historyMessages[index + 1] : null, dayKey }] : [];
+  });
+  const visibleHistoryEntries = consultationMarks.filter((mark) => isWithinTimelineWindow(mark.message.timestamp));
+  const timelineDays = visibleHistoryEntries.reduce<Array<{ dayKey: string; marks: ConsultationMark[] }>>((days, mark) => {
+    const current = days.at(-1);
+    if (current?.dayKey === mark.dayKey) current.marks.push(mark);
+    else days.push({ dayKey: mark.dayKey, marks: [mark] });
+    return days;
+  }, []);
+  function toggleTimelineDay(dayKey: string) {
+    setExpandedTimelineDays((current) => {
+      const next = new Set(current);
+      if (next.has(dayKey)) next.delete(dayKey); else next.add(dayKey);
+      return next;
+    });
+  }
+  function jumpToMark(mark: ConsultationMark) {
+    const selected = historyMessages[mark.index];
     if (!selected) return;
-    const elementId = `consultation-turn-${selected.id ?? index}`;
+    setSelectedHistoryEntryId(selected.id ?? null);
+    const elementId = `consultation-turn-${selected.id ?? mark.index}`;
     const visible = document.getElementById(elementId);
     if (visible) return visible.scrollIntoView({ behavior: "smooth", block: "start" });
-    const answer = historyMessages[index + 1]?.role === "assistant" ? historyMessages[index + 1] : null;
-    setHistoryPreview([selected, ...(answer ? [answer] : [])]);
+    setHistoryPreview([selected, ...(mark.answer ? [mark.answer] : [])]);
     window.setTimeout(() => document.getElementById(elementId)?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  }
+
+  function startComposerResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = composerHeight;
+    const resize = (move: PointerEvent) => setComposerHeight(Math.max(64, Math.min(200, startHeight - (move.clientY - startY))));
+    const stop = () => {
+      window.removeEventListener("pointermove", resize);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", resize);
+    window.addEventListener("pointerup", stop, { once: true });
   }
 
   async function submit() {
     const text = input.trim();
     if (!text || loading) return;
     const pendingId = crypto.randomUUID();
-    const pendingQuestion: Message = { id: `${pendingId}:question`, role: "user", content: text, time: "刚刚" };
+    const timestamp = new Date().toISOString();
+    const pendingQuestion: Message = { id: `${pendingId}:question`, role: "user", content: text, time: "刚刚", timestamp };
     setHistoryPreview(null);
     setMessages((items) => [...items, pendingQuestion]);
     setHistoryMessages((items) => [...items, pendingQuestion]);
     setInput("");
+    const startedAt = performance.now();
+    setRequestStartedAt(startedAt);
+    setLoadingElapsedMs(0);
     setLoading(true);
     try {
-      const result = await api<AgentResult>("/api/v1/consultations/messages", { method: "POST", body: JSON.stringify({ message: text, clientRequestId: pendingId }) });
-      const answer: Message = { id: `${result.entryId ?? pendingId}:answer`, role: "assistant", content: result.answer, time: "刚刚", laws: result.matched_laws, cases: result.matched_cases };
-      setMessages((items) => [...items, answer]);
-      setHistoryMessages((items) => [...items, answer]);
+      await consultationStream(text, pendingId, (event, data) => {
+        if (event === "core_delta" && typeof data.content === "string") {
+          const core: Message = { id: `${pendingId}:core`, role: "assistant", content: data.content, time: "刚刚", timestamp, elapsedMs: Number(data.elapsedMs ?? performance.now() - startedAt) };
+          setMessages((items) => [...items, core]);
+        }
+        if (event === "answer_delta" && typeof data.content === "string") {
+          const answer: Message = {
+            id: `${pendingId}:answer`, role: "assistant", content: data.content, time: "刚刚", timestamp,
+            elapsedMs: performance.now() - startedAt,
+            laws: Array.isArray(data.matched_laws) ? data.matched_laws as LegalReference[] : [],
+            cases: Array.isArray(data.matched_cases) ? data.matched_cases as CaseReference[] : [],
+          };
+          setMessages((items) => {
+            const hasCore = items.some((item) => item.id === `${pendingId}:core`);
+            return hasCore ? items.map((item) => item.id === `${pendingId}:core` ? answer : item) : [...items, answer];
+          });
+          setHistoryMessages((items) => [...items, answer]);
+        }
+        if (event === "complete") {
+          setMessages((items) => items.map((item) => item.id === `${pendingId}:answer` ? { ...item, id: `${String(data.entryId ?? pendingId)}:answer`, laws: Array.isArray(data.matched_laws) ? data.matched_laws as LegalReference[] : [], cases: Array.isArray(data.matched_cases) ? data.matched_cases as CaseReference[] : [], elapsedMs: Number(data.elapsedMs ?? performance.now() - startedAt) } : item));
+          setHistoryMessages((items) => items.map((item) => item.id === `${pendingId}:answer` ? { ...item, id: `${String(data.entryId ?? pendingId)}:answer`, laws: Array.isArray(data.matched_laws) ? data.matched_laws as LegalReference[] : [], cases: Array.isArray(data.matched_cases) ? data.matched_cases as CaseReference[] : [], elapsedMs: Number(data.elapsedMs ?? performance.now() - startedAt) } : item));
+        }
+        if (event === "error") throw new Error(typeof data.message === "string" ? data.message : "服务暂时不可用，请稍后重试。");
+      });
     } catch (error) {
       setMessages((items) => [...items, { role: "assistant", content: error instanceof Error ? error.message : "服务暂时不可用，请稍后重试。", time: "刚刚" }]);
     } finally {
       setLoading(false);
+      setRequestStartedAt(null);
     }
   }
 
@@ -147,6 +278,7 @@ export default function Home() {
   if (page === "login") return <LoginPage onLogin={(nextAccount) => { setAccount(nextAccount); setPage("chat"); }} />;
 
   const displayMessages = historyPreview ?? messages;
+  const corePreviewVisible = messages.some((message) => message.id?.endsWith(":core"));
 
   return <main className="workspace">
     {page === "chat" && <aside className={`sidebar ${collapsed ? "isCollapsed" : ""}`}>
@@ -158,7 +290,7 @@ export default function Home() {
       <div className="sidebarActions">
         <button className="sidebarAction clearChatAction" onClick={() => void clearChat()} aria-label="清空当前聊天"><span>⌫</span>{collapsed ? "" : "清空当前聊天"}</button>
       </div>
-      {!collapsed && <div className="topicPanel"><div className="sectionLabel">咨询刻度</div>{consultationMarks.length ? <div className="consultationMarks">{consultationMarks.map(({ message, answer, index }) => <button className="consultationMark" key={message.id ?? index} onClick={() => jumpToMark(index)} aria-label={`跳转至第 ${consultationMarks.findIndex((mark) => mark.index === index) + 1} 次咨询`}><i /><span>{message.time}</span><div className="markPreview"><b>问：{message.content.slice(0, 34)}{message.content.length > 34 ? "…" : ""}</b><small>答：{answer?.content.slice(0, 42) ?? "正在生成…"}{(answer?.content.length ?? 0) > 42 ? "…" : ""}</small></div></button>)}{nextHistoryCursor && <button className="loadOlderMarks" onClick={() => void loadOlderHistory()}>加载更早记录</button>}</div> : <p className="marksEmpty">咨询问答会按时间留在这里，点击刻度可快速回看。</p>}</div>}
+      {!collapsed && <div className="topicPanel"><div className="sectionLabel">咨询刻度 <span>近 7 天</span></div>{timelineDays.length ? <div className="consultationMarks">{timelineDays.map(({ dayKey, marks }) => { const expanded = expandedTimelineDays.has(dayKey); return <section className={`timelineDay ${expanded ? "isExpanded" : ""}`} key={dayKey}><button className="timelineDayToggle" onClick={() => toggleTimelineDay(dayKey)} aria-expanded={expanded}><i />{formatTimelineDay(dayKey)}<span>{marks.length}</span><b>{expanded ? "⌃" : "⌄"}</b></button>{expanded && <div className="timelineDayMarks">{marks.map((mark) => <button className={`consultationMark ${selectedHistoryEntryId === mark.message.id ? "isActive" : ""}`} key={mark.message.id ?? mark.index} onClick={() => jumpToMark(mark)} aria-label={`查看 ${formatTimelineDay(mark.dayKey)} ${formatTimelineTime(mark.message.timestamp)} 的咨询`}><i /><span>{formatTimelineTime(mark.message.timestamp)}</span><div className="markPreview"><b>问：{mark.message.content.slice(0, 34)}{mark.message.content.length > 34 ? "…" : ""}</b><small>答：{mark.answer?.content.slice(0, 42) ?? "正在生成…"}{(mark.answer?.content.length ?? 0) > 42 ? "…" : ""}</small></div></button>)}</div>}</section>; })}</div> : <p className="marksEmpty">近 7 天的咨询会按日期显示在这里。</p>}</div>}
       <div className="sidebarUser">
         {accountMenuOpen && <AccountMenu anchorRef={accountTriggerRef} account={account} isAdmin={page === "admin" || account?.role === "system_admin" || account?.role === "group_admin"} onClose={() => setAccountMenuOpen(false)} onSettings={() => { setSettingsOrigin(page === "admin" ? "admin" : "chat"); setPage("settings"); setAccountMenuOpen(false); }} onAdmin={() => { setPage("admin"); setAccountMenuOpen(false); }} onLogout={async () => { await api("/api/v1/auth/logout", { method: "POST" }).catch(() => undefined); setAccount(null); setPage("login"); setAccountMenuOpen(false); }} />}
         <button ref={accountTriggerRef} className="accountTrigger" onClick={() => setAccountMenuOpen((open) => !open)} aria-label="账户菜单" aria-expanded={accountMenuOpen}><div className="userAvatar">{account?.displayName?.slice(0, 1) || "我"}</div>{!collapsed && <div className="userName">{account?.displayName || "账户"}<span>{account?.role === "system_admin" ? "系统管理员" : account?.role === "group_admin" ? "组长" : "坐席律师"}</span></div>}</button>
@@ -166,16 +298,36 @@ export default function Home() {
     </aside>}
     <section ref={chatAreaRef} className={`chatArea mainMode-${mainMode} ${page === "admin" ? "adminArea" : ""}`}>
       <header className="topbar">{(page === "settings" || page === "admin") && <button className="topbarBack" onClick={() => setPage(page === "settings" ? settingsOrigin : "chat")}>← 返回{page === "settings" && settingsOrigin === "admin" ? "管理" : "咨询"}</button>}</header>
-      {page === "settings" ? <SettingsPage account={account} onPhoneChanged={() => { setAccount(null); setPage("login"); }} /> : page === "admin" ? <AdminPage account={account} /> : <>{historyPreview && <div className="historyPreviewBar"><span>正在查看一条历史咨询</span><button onClick={() => setHistoryPreview(null)}>返回当前咨询</button></div>}<div className="conversation">{displayMessages.length === 0 ? <div className="emptyState"><div className="emptyMark">{clientBrand.logoText}</div>{mainMode !== "icon" && <><h1>{clientBrand.consultationGreeting}</h1><p>请输入您要咨询的法律问题</p></>}</div> : displayMessages.map((message, index) => <div id={message.role === "user" ? `consultation-turn-${message.id ?? index}` : undefined} className={`message ${message.role}`} key={message.id ?? `${message.time}-${index}`}><div className="messageAvatar">{message.role === "assistant" ? clientBrand.logoText : "坐"}</div><div className="messageBody"><div className="messageMeta"><b>{message.role === "assistant" ? clientBrand.assistantName : "坐席律师"}</b><time>{message.time}</time></div><div className="bubble">{message.content}</div>{message.laws?.length ? <ToolReferences laws={message.laws} /> : null}{message.cases?.length ? <ToolReferences cases={message.cases} /> : null}</div></div>)}{loading && <div className="message assistant"><div className="messageAvatar">{clientBrand.logoText}</div><div className="bubble loadingDots"><i /><i /><i /></div></div>}</div><div className="composerDock"><div className="composer"><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); } }} placeholder="请输入您要咨询的法律问题…" rows={1} /><div className="composerFoot">{mainMode !== "icon" && <span>{mainMode === "compact" ? "AI 辅助内容，请结合实际判断" : "AI 生成内容仅供法律咨询辅助，请结合实际情况审慎判断"}</span>}<button className="send" onClick={submit} disabled={!input.trim() || loading}>发送</button></div></div></div></>}
+        {page === "settings" ? <SettingsPage account={account} onPhoneChanged={() => { setAccount(null); setPage("login"); }} /> : page === "admin" ? <AdminPage account={account} /> : <>
+          {historyPreview && <div className="historyPreviewBar"><span>正在查看一条历史咨询</span><button onClick={() => setHistoryPreview(null)}>返回当前咨询</button></div>}
+          <div ref={conversationRef} className="conversation">
+            {displayMessages.length === 0 ? <div className="emptyState"><div className="emptyMark">{clientBrand.logoText}</div>{mainMode !== "icon" && <><h1>{clientBrand.consultationGreeting}</h1><p>请输入您要咨询的法律问题</p></>}</div> : displayMessages.map((message, index) => <div id={message.role === "user" ? `consultation-turn-${message.id ?? index}` : undefined} className={`message ${message.role}`} key={message.id ?? `${message.time}-${index}`}>
+              {message.role === "user" ? <div className="messageAvatar">{account?.displayName?.slice(0, 1) || "我"}</div> : null}
+              <div className="messageBody">{message.role === "assistant" ? <div className="messageMeta"><b>{clientBrand.assistantName}</b>{message.id?.endsWith(":core") && loading ? <time>{formatElapsedDuration(loadingElapsedMs)}</time> : typeof message.elapsedMs === "number" ? <time>{formatElapsedDuration(message.elapsedMs)}</time> : null}</div> : null}<div className="bubble">{message.content}</div>{message.laws?.length ? <ToolReferences laws={message.laws} /> : null}{message.cases?.length ? <ToolReferences cases={message.cases} /> : null}</div>
+            </div>)}
+            {loading && !corePreviewVisible && <div className="message assistant"><div className="messageBody"><div className="messageMeta"><b>{clientBrand.assistantName}</b><time>{formatElapsedDuration(loadingElapsedMs)}</time></div><div className="bubble loadingDots"><i /><i /><i /></div></div></div>}
+          </div>
+          <div className="composerDock"><div className="composer"><div className="composerResizeHandle" role="separator" aria-label="拖动调整输入框高度" onPointerDown={startComposerResize} /><textarea style={{ height: composerHeight }} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); } }} placeholder="请输入您要咨询的法律问题…" rows={3} /><div className="composerFoot">{mainMode !== "icon" && <span>{mainMode === "compact" ? "AI 辅助内容，请结合实际判断" : "AI 生成内容仅供法律咨询辅助，请结合实际情况审慎判断"}</span>}<button className="send" onClick={submit} disabled={!input.trim() || loading}>发送</button></div></div></div>
+        </>}
     </section>
   </main>;
 }
 
 function ToolReferences({ laws, cases }: { laws?: LegalReference[]; cases?: CaseReference[] }) {
-  if (laws?.length) return <section className="toolReferences"><b>法条匹配结果</b>{laws.map((law, index) => <article key={`${law.name}-${law.article}-${index}`}><strong>{law.name} {law.article}</strong><p>{law.text}</p></article>)}</section>;
-  if (cases?.length) return <section className="toolReferences"><b>相似咨询案例参考</b>{cases.map((item, index) => <article key={`${item.keyword}-${index}`}><strong>{item.keyword || "相似咨询案例"}</strong><p>{item.assessment_conclusion || item.fact_summary}</p>{item.law_refs?.length ? <small>{item.law_refs.join("；")}</small> : null}</article>)}</section>;
-  return null;
+  if (!laws?.length && !cases?.length) return null;
+  return <>{laws?.length ? <section className="toolReferences"><b>相关法条</b>{laws.map((law, index) => <article key={`${law.name}-${law.article}-${index}`}><strong>{law.name} {law.article}</strong><p>{law.text}</p></article>)}</section> : null}{cases?.length ? <CaseReferences cases={cases} /> : null}</>;
 }
+
+function CaseReferences({ cases }: { cases: CaseReference[] }) {
+  const [expandedCaseKey, setExpandedCaseKey] = useState(() => `${cases[0]?.keyword ?? "case"}-0`);
+
+  return <section className="toolReferences caseReferences"><b>类似案例</b>{cases.map((item, index) => {
+    const caseKey = `${item.keyword ?? "case"}-${index}`;
+    const isExpanded = expandedCaseKey === caseKey;
+    return <details className="caseReference" key={caseKey} open={isExpanded} onToggle={(event) => setExpandedCaseKey(event.currentTarget.open ? caseKey : null)}><summary><span><strong>{item.keyword || "相似案例"}</strong></span><i>{isExpanded ? "收起" : "展开"}</i></summary><div className="caseReferenceBody"><section><em>案情摘要</em><p>{item.fact_summary}</p></section><section><em>裁判/分析结论</em><p>{item.assessment_conclusion || "暂无结论摘要"}</p></section>{item.assessment_reasoning ? <section><em>分析理由</em><p>{item.assessment_reasoning}</p></section> : null}{item.risk_notes ? <section><em>风险提示</em><p>{item.risk_notes}</p></section> : null}{item.action_steps?.length ? <section><em>建议动作</em><ol>{item.action_steps.map((step, stepIndex) => <li key={`${item.keyword}-${stepIndex}`}>{step}</li>)}</ol></section> : null}{item.law_refs?.length ? <section><em>相关法条</em><small>{item.law_refs.join("；")}</small></section> : null}</div></details>;
+  })}</section>;
+}
+
 
 function AccountMenu({ anchorRef, account, isAdmin, onClose, onSettings, onAdmin, onLogout }: { anchorRef: RefObject<HTMLButtonElement | null>; account: Account | null; isAdmin: boolean; onClose: () => void; onSettings: () => void; onAdmin: () => void; onLogout: () => void }) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -203,7 +355,7 @@ function SettingsPage({ account, onPhoneChanged }: { account: Account | null; on
   const [phoneChangeOpen, setPhoneChangeOpen] = useState(false);
   const [editingName, setEditingName] = useState(false); const [displayName, setDisplayName] = useState(account?.displayName ?? ""); const [profileBusy, setProfileBusy] = useState(false); const [profileMessage, setProfileMessage] = useState("");
   async function saveName() { const name = displayName.trim(); if (name.length < 2 || name.length > 80 || profileBusy) return; setProfileBusy(true); setProfileMessage(""); try { await api("/api/v1/account/profile", { method: "POST", body: JSON.stringify({ displayName: name }) }); window.dispatchEvent(new CustomEvent("profile-updated", { detail: name })); setEditingName(false); setProfileMessage("显示名称已更新"); } catch (error) { setProfileMessage(error instanceof Error ? error.message : "修改失败，请稍后重试。"); } finally { setProfileBusy(false); } }
-  return <div className="settingsPage"><div className="settingsContent"><div className="settingsTitle"><p>账户资料</p><h1>设置</h1><span>管理当前账户的个人资料与绑定手机号。</span></div><section className="settingsCard"><h2>个人资料</h2><div className="settingsRow profileNameRow"><span>显示名称</span>{editingName ? <div className="profileNameEditor"><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={80} autoFocus /><button onClick={() => { setEditingName(false); setDisplayName(account?.displayName ?? ""); }}>取消</button><button className="primary" disabled={profileBusy || displayName.trim().length < 2} onClick={() => void saveName()}>保存</button></div> : <div className="profileNameValue"><b>{account?.displayName || "待账户服务载入"}</b><button onClick={() => setEditingName(true)}>修改</button></div>}</div>{profileMessage && <div className="profileMessage">{profileMessage}</div>}<div className="settingsRow"><span>头像</span><button disabled>由账户服务管理</button></div></section><section className="settingsCard"><h2>绑定联系方式</h2><div className="settingsRow"><span>绑定手机号</span><b>{account?.phone || "待账户服务载入"}</b></div><button className="settingsAction" onClick={() => setPhoneChangeOpen(true)}>换绑手机号</button></section></div>{phoneChangeOpen && <PhoneChangeModal currentPhone={account?.phone ?? ""} onClose={() => setPhoneChangeOpen(false)} onCompleted={onPhoneChanged} />}</div>;
+  return <div className="settingsPage"><div className="settingsContent"><div className="settingsTitle"><p>账户资料</p><h1>设置</h1><span>管理当前账户的个人资料与绑定手机号。</span></div><section className="settingsCard"><h2>个人资料</h2><div className="settingsRow profileNameRow"><span>显示名称</span>{editingName ? <div className="profileNameEditor"><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={80} autoFocus /><button onClick={() => { setEditingName(false); setDisplayName(account?.displayName ?? ""); }}>取消</button><button className="primary" disabled={profileBusy || displayName.trim().length < 2} onClick={() => void saveName()}>保存</button></div> : <div className="profileNameValue"><b>{account?.displayName || "待账户服务载入"}</b><button onClick={() => setEditingName(true)}>修改</button></div>}</div>{profileMessage && <div className="profileMessage">{profileMessage}</div>}</section><section className="settingsCard"><h2>绑定联系方式</h2><div className="settingsRow"><span>绑定手机号</span><b>{account?.phone || "待账户服务载入"}</b></div><button className="settingsAction" onClick={() => setPhoneChangeOpen(true)}>换绑手机号</button></section></div>{phoneChangeOpen && <PhoneChangeModal currentPhone={account?.phone ?? ""} onClose={() => setPhoneChangeOpen(false)} onCompleted={onPhoneChanged} />}</div>;
 }
 
 function PhoneChangeModal({ currentPhone, onClose, onCompleted }: { currentPhone: string; onClose: () => void; onCompleted: () => void }) {
@@ -224,7 +376,7 @@ function LoginPage({ onLogin }: { onLogin: (account: Account) => void }) {
   const validCredential = /^\d{6}$/.test(credential);
   async function sendCode() { if (!validPhone || countdown) return; try { await api("/api/v1/auth/sms/send", { method: "POST", body: JSON.stringify({ phone, purpose: "login" }) }); setMessage("验证码已发送，请查收短信。"); setCountdown(60); const timer = window.setInterval(() => setCountdown((value) => { if (value <= 1) { window.clearInterval(timer); return 0; } return value - 1; }), 1000); } catch (error) { setMessage(error instanceof Error ? error.message : "发送失败，请稍后重试。"); } }
   async function login() { try { const result = await api<{ user: Account }>("/api/v1/auth/sms/verify", { method: "POST", body: JSON.stringify({ phone, code: credential, purpose: "login" }) }); onLogin(result.user); } catch (error) { setMessage(error instanceof Error ? error.message : "登录失败，请稍后重试。"); } }
-  return <main className="loginPage"><div className="loginShell"><section className="loginBrandPanel"><div className="tenantLogo" aria-label="客户品牌标志">{clientBrand.logoUrl ? <Image src={clientBrand.logoUrl} alt="客户品牌标志" width={64} height={64} unoptimized /> : clientBrand.logoText}</div><h1>{clientBrand.productName}</h1><p>{clientBrand.slogan}</p></section><section className="loginFormPanel"><div className="loginPanel"><h1>{clientBrand.loginGreeting}</h1><p>{clientBrand.loginPrompt}</p><div className="loginTabs"><button className="active">短信验证码</button></div><label>手机号<input value={phone} onChange={(event) => { setPhone(event.target.value.replace(/\D/g, "")); setMessage(""); }} inputMode="numeric" maxLength={11} placeholder="请输入手机号" /></label><label>验证码<div className="verificationLine"><input value={credential} onChange={(event) => setCredential(event.target.value.replace(/\D/g, ""))} inputMode="numeric" maxLength={6} placeholder="请输入 6 位验证码" /><button disabled={!validPhone || countdown > 0} onClick={sendCode}>{countdown ? `${countdown}s 后重试` : "获取验证码"}</button></div></label>{message && <div className="loginMessage">{message}</div>}<label className="agreement"><input type="checkbox" checked={agreed} onChange={(event) => setAgreed(event.target.checked)} />我已阅读并同意相关服务协议</label><button className="loginSubmit" disabled={!validPhone || !validCredential || !agreed} onClick={login}>登录</button></div></section></div></main>;
+  return <main className="loginPage"><div className="loginShell"><section className="loginBrandPanel"><div className="tenantLogo" aria-label="客户品牌标志">{clientBrand.logoUrl ? <Image src={clientBrand.logoUrl} alt="客户品牌标志" width={64} height={64} unoptimized /> : clientBrand.logoText}</div><h1>{clientBrand.productName}</h1><p>{clientBrand.slogan}</p></section><section className="loginFormPanel"><div className="loginPanel"><h1>{clientBrand.loginGreeting}</h1><p>{clientBrand.loginPrompt}</p><div className="loginTabs"><button className="active">短信验证码</button></div><label>手机号<input value={phone} onChange={(event) => { setPhone(event.target.value.replace(/\D/g, "")); setMessage(""); }} inputMode="numeric" maxLength={11} placeholder="请输入手机号" /></label><label>验证码<div className="verificationLine"><input value={credential} onChange={(event) => setCredential(event.target.value.replace(/\D/g, ""))} inputMode="numeric" maxLength={6} placeholder="请输入 6 位验证码" /><button disabled={!validPhone || countdown > 0} onClick={sendCode}>{countdown ? `${countdown}s 后重试` : "获取验证码"}</button></div></label>{message && <div className="loginMessage">{message}</div>}<div className="agreement"><input id="login-agreement" type="checkbox" checked={agreed} onChange={(event) => setAgreed(event.target.checked)} /><label htmlFor="login-agreement">我已阅读并同意<a href="/legal/user-agreement.html" target="_blank" rel="noreferrer">《用户服务协议》</a>和<a href="/legal/privacy-policy.html" target="_blank" rel="noreferrer">《隐私政策》</a></label></div><button className="loginSubmit" disabled={!validPhone || !validCredential || !agreed} onClick={login}>登录</button></div></section></div></main>;
 }
 
 function AdminPage({ account }: { account: Account | null }) {

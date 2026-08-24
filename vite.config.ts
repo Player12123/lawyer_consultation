@@ -48,6 +48,8 @@ export default defineConfig(async () => {
     // requests are forwarded to the separately running local API on :8788.
     // Production uses the HTTPS reverse proxy described in the deployment doc.
     server: {
+      host: true,
+      allowedHosts: ["cacti-improper-amazingly.ngrok-free.dev"],
       ...(isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : {}),
       proxy: {
         "/api": {

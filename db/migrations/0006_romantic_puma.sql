@@ -1,0 +1,1 @@
+ALTER TABLE `consultation_entries` ADD `content_purged_at` datetime;

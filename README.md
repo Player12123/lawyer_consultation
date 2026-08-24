@@ -39,7 +39,10 @@ npm test                # 构建与项目结构检查
 npm run db:generate     # 根据 schema 生成 MySQL 迁移
 npm run db:migrate      # 应用 MySQL 迁移
 npm run db:seed:local   # 初始化本地测试账号
+npm run test:smoke      # 对已启动的本机/部署环境执行无副作用冒烟测试
 ```
+
+生产交付、运维和验收请先阅读 `docs/production-handover.md`；本机验收结果见 `docs/local-acceptance-report.md`。
 
 ## 客户品牌
 

@@ -1,0 +1,24 @@
+[Unit]
+Description=12348 Legal Assistant API
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pocketlegal
+Group=pocketlegal
+WorkingDirectory=/opt/pocket-legal-assistant
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/pocket-legal-assistant/api.env
+ExecStart=/usr/bin/npm run api:start
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/pocket-legal-assistant
+
+[Install]
+WantedBy=multi-user.target

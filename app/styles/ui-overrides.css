@@ -135,3 +135,97 @@ body .phoneChangeModal {
     grid-template-columns: 1fr 1fr auto;
   }
 }
+
+/* Shared product visual language: bright blue shell, white work surfaces,
+   and restrained accent colors matching the approved dashboard palette. */
+:root {
+  --ink: #17324d;
+  --muted: #6f8498;
+  --line: #d8e7f4;
+  --navy: #0d47a1;
+  --navy-2: #1769e8;
+  --gold: #1769e8;
+  --page: #eef7ff;
+  --surface: #fff;
+}
+
+html, body { background: var(--page); color: var(--ink); }
+.chatArea { background: linear-gradient(180deg, #f7fbff 0%, #fff 38%); }
+.topbar { border-bottom-color: var(--line); background: #fff; }
+.sidebar { background: linear-gradient(180deg, #0d47a1 0%, #1769e8 58%, #238ce8 100%); }
+.sidebarAction { border-color: #ffffff55; background: #ffffff1d; }
+.sidebarAction:hover, .sidebarAction:focus-visible { background: #ffffff32; }
+.sidebarUser { border-top-color: #ffffff32; }
+.sectionLabel { color: #c7e1ff; }
+.userName span { color: #d5eaff; }
+.consultationMark { color: #e8f4ff; }
+.consultationMark > i { border-color: #9ddcff; background: #1769e8; }
+.consultationMark > span, .marksEmpty { color: #d4eaff; }
+.consultationMark:hover > span { color: #fff; }
+.loadOlderMarks { border-color: #ffffff55; color: #e5f3ff; }
+.emptyMark, .messageAvatar { background: linear-gradient(135deg, #1769e8, #00a8c7); }
+.message.user .messageAvatar { background: #dceeff; color: #1769e8; }
+.message.user .bubble { background: #e8f3ff; color: #17324d; }
+.messageMeta b { color: #234968; }
+.bubble { color: #294761; }
+.composerDock { background: linear-gradient(transparent, #fff 24%); }
+.composer { border-color: #b9d5ec; box-shadow: 0 10px 30px #1769e81c; }
+.composer textarea { color: #17324d; }
+.send, .settingsAction, .batchEntry, .memberInlineEditor button.primary,
+.modalActions .primary, .loginSubmit { background: linear-gradient(90deg, #0d47a1, #1769e8 58%, #00a8c7); border-color: transparent; }
+.send:hover, .settingsAction:hover, .batchEntry:hover, .loginSubmit:hover { filter: brightness(1.06); }
+.settingsPage { background: linear-gradient(180deg, #eef7ff, #f9fcff 70%); }
+.settingsTitle p { color: #1769e8; }
+.settingsTitle h1, .settingsCard h2 { color: #17324d; }
+.settingsTitle span, .settingsCard p { color: #6f8498; }
+.settingsCard { border-color: #d8e7f4; background: #fff; box-shadow: 0 8px 24px #1769e810; }
+.settingsRow { border-top-color: #e5f0f8; color: #55718a; }
+.settingsRow b, .profileNameValue b { color: #234968; }
+.settingsAction, .settingsRow button { border-color: #b8d5ec; color: #1769e8; background: #fff; }
+.settingsAction:hover, .settingsRow button:hover { background: #eef7ff; }
+.adminNotice { border-color: #b9dcf2; background: #eaf6ff; color: #17609a; }
+.teamMetrics article { border-color: #cfe3f2; background: #fff; box-shadow: 0 8px 24px #1769e812; }
+.teamMetrics span, .groupCards span, .groupCards small { color: #6f8498; }
+.teamMetrics b, .categoryBars b { color: #1769e8; }
+.groupCards article { border-color: #cfe3f2; background: #f5fbff; }
+.groupCards b { color: #234968; }
+.memberTable { border-color: #cfe3f2; }
+.memberHead { background: #e7f3ff; color: #1769e8; }
+.memberRow { border-top-color: #e2eef7; background: #fff; color: #365a76; }
+.memberRow b { color: #234968; }
+.memberRow small { color: #7d96aa; }
+.roleTag, .statusTag { background: #e7f3ff; color: #1769e8; }
+.roleTag.group_admin { background: #e1f8fa; color: #007f98; }
+.roleTag.system_admin { background: #eceaff; color: #624ad2; }
+.statusTag.disabled { background: #fff0ef; color: #c44d47; }
+.memberAction { border-color: #b8d5ec; color: #1769e8; background: #fff; }
+.memberAction.primary { border-color: #9bc9ee; background: #eaf6ff; color: #17609a; }
+.memberAction.danger { border-color: #efc5c2; color: #b44b43; }
+.alignedForm input, .alignedForm select, .memberRow select, .memberInlineEditor select,
+.memberEditModal input { border-color: #bcd7eb; color: #234968; }
+.alignedForm input:focus, .alignedForm select:focus, .memberEditModal select:focus,
+.memberEditModal input:focus, .profileNameEditor input:focus { border-color: #1769e8; box-shadow: 0 0 0 3px #1769e81c; }
+.batchToolbar { border-color: #b9d8ee; background: #edf8ff; }
+.batchToolbar b { color: #17609a; }
+.batchToolbar button { border-color: #1769e8; background: #1769e8; }
+.phoneChangeModal, .memberEditModal { border-color: #cfe3f2; box-shadow: 0 22px 60px #0d47a133; }
+.modalBackdrop { background: #0d47a126; }
+.modalStep { color: #1769e8; }
+.phoneChangeMessage { background: #edf8ff; color: #17609a; }
+.accountMenu { border-color: #cfe3f2; box-shadow: 0 16px 42px #0d47a133; }
+.accountMenu button:hover { background: #edf7ff; }
+.profileMessage { color: #16835e; }
+.historyPreviewBar { border-color: #b9d8ee; background: #edf8ff; color: #4b708d; }
+.toolReferences { border-color: #cfe3f2; background: #f5fbff; color: #345a75; }
+.toolReferences > b { color: #17609a; }
+.authChecking { border-color: #cfe3f2; background: #fff; color: #55718a; }
+.labPage { background: linear-gradient(180deg, #eef7ff, #fff); color: #17324d; }
+.labHeader p, .labMessage span { color: #62809d; }
+.labHeader h1 { color: #17324d; }
+.labHeader button, .labComposer button { background: linear-gradient(90deg, #0d47a1, #1769e8 58%, #00a8c7); }
+.labEmpty { border-color: #b9d8ee; background: #fff; color: #617d96; }
+.labEmpty h2 { color: #234968; }
+.labMessage div { box-shadow: 0 6px 20px #1769e812; }
+.labMessage.user div { background: #1769e8; }
+.labComposer { border-top-color: #cfe3f2; background: #fff; }
+.labComposer textarea { border-color: #bcd7eb; }
