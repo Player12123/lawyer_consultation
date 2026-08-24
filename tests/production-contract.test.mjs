@@ -24,6 +24,35 @@ test("temporary acceptance can opt into insecure SMS gateway endpoints explicitl
   assert.match(api, /!allowInsecureEndpoint/);
 });
 
+test("production runtime knobs are environment-configurable and documented", async () => {
+  const [api, envExample, handover] = await Promise.all([
+    readFile(new URL("backend/server.mjs", root), "utf8"),
+    readFile(new URL(".env.example", root), "utf8"),
+    readFile(new URL("docs/production-handover.md", root), "utf8"),
+  ]);
+
+  for (const key of [
+    "API_PORT",
+    "SESSION_IDLE_MINUTES",
+    "AI_THINKING_TYPE",
+    "AI_TEMPERATURE",
+    "AI_TIMEOUT_MS",
+    "LAW_SEARCH_TIMEOUT_MS",
+    "CASE_SEARCH_TIMEOUT_MS",
+    "CONSULTATION_CONTENT_RETENTION_DAYS",
+    "INTERNAL_ERROR_LOG_RETENTION_DAYS",
+  ]) {
+    assert.match(api, new RegExp(`[".]${key}`));
+    assert.match(envExample, new RegExp(`${key}=`));
+    assert.match(handover, new RegExp(key));
+  }
+
+  assert.doesNotMatch(api, /port:\s*8788/);
+  assert.doesNotMatch(api, /aiTimeout:\s*45_000/);
+  assert.doesNotMatch(api, /lawSearchTimeout:\s*4_000/);
+  assert.doesNotMatch(api, /caseSearchTimeout:\s*5_000/);
+});
+
 test("auth bootstrap falls back to login when session restore fails", async () => {
   const page = await readFile(new URL("app/page.tsx", root), "utf8");
 
@@ -37,12 +66,12 @@ test("login sessions use a ten-minute idle window and replace prior account sess
     readFile(new URL("app/page.tsx", root), "utf8"),
   ]);
 
-  assert.match(api, /sessionMinutes:\s*10/);
+  assert.match(api, /sessionMinutes:\s*envNumber\("SESSION_IDLE_MINUTES", 10/);
   assert.doesNotMatch(api, /sessionHours:\s*8/);
   assert.match(api, /new Date\(Date\.now\(\) \+ config\.sessionMinutes \* 60_000\)/);
   assert.match(api, /UPDATE sessions SET revoked_at = NOW\(\) WHERE tenant_id = \? AND user_id = \? AND revoked_at IS NULL/);
   assert.match(api, /async function refreshSession\(request, response, session\)/);
-  assert.match(api, /UPDATE sessions SET last_seen_at = NOW\(\), expires_at = DATE_ADD\(NOW\(\), INTERVAL 10 MINUTE\) WHERE id = \?/);
+  assert.match(api, /UPDATE sessions SET last_seen_at = NOW\(\), expires_at = DATE_ADD\(NOW\(\), INTERVAL \? MINUTE\) WHERE id = \?/);
   assert.match(page, /window\.setInterval\(\(\) => void refreshSession\(\), 60_000\)/);
 });
 

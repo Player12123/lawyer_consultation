@@ -19,25 +19,33 @@ for (const key of required) if (!process.env[key] || process.env[key]?.startsWit
 const appEnvironment = process.env.APP_ENV ?? "development";
 if (!["development", "production"].includes(appEnvironment)) throw new Error("APP_ENV must be development or production");
 const configuredOrigin = process.env.APP_ORIGIN ?? "http://localhost:3000";
+function envNumber(key, fallback, { integer = true, min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const raw = process.env[key];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) throw new Error(`${key} must be a ${integer ? "whole " : ""}number between ${min} and ${max}`);
+  return value;
+}
 const config = {
-  port: 8788,
+  port: envNumber("API_PORT", 8788, { min: 1, max: 65_535 }),
   origin: configuredOrigin.replace(/\/$/, ""),
   tenantId: process.env.TENANT_ID,
   cookieName: "pla_session",
-  sessionMinutes: 10,
+  sessionMinutes: envNumber("SESSION_IDLE_MINUTES", 10, { min: 1, max: 1_440 }),
+  phoneChangeProofMinutes: envNumber("PHONE_CHANGE_PROOF_MINUTES", 10, { min: 1, max: 1_440 }),
   sessionPepper: process.env.SESSION_TOKEN_PEPPER,
   phonePepper: process.env.PHONE_HASH_PEPPER,
   codePepper: process.env.VERIFICATION_CODE_PEPPER,
-  smsProvider: "bestone",
-  aiThinkingType: "disabled",
-  aiTemperature: 0.35,
-  aiTimeout: 45_000,
+  smsProvider: process.env.SMS_PROVIDER ?? "bestone",
+  aiThinkingType: process.env.AI_THINKING_TYPE ?? "disabled",
+  aiTemperature: envNumber("AI_TEMPERATURE", 0.35, { integer: false, min: 0, max: 2 }),
+  aiTimeout: envNumber("AI_TIMEOUT_MS", 45_000, { min: 1_000, max: 300_000 }),
   legalToolsAppId: process.env.LEGAL_TOOLS_X_APP_ID ?? "",
   legalToolsAppSecret: process.env.LEGAL_TOOLS_X_APP_SECRET ?? "",
-  lawSearchTimeout: 4_000,
-  caseSearchTimeout: 5_000,
-  consultationContentDays: 365,
-  internalErrorLogDays: 200,
+  lawSearchTimeout: envNumber("LAW_SEARCH_TIMEOUT_MS", 4_000, { min: 500, max: 120_000 }),
+  caseSearchTimeout: envNumber("CASE_SEARCH_TIMEOUT_MS", 5_000, { min: 500, max: 120_000 }),
+  consultationContentDays: envNumber("CONSULTATION_CONTENT_RETENTION_DAYS", 365, { min: 1, max: 3_650 }),
+  internalErrorLogDays: envNumber("INTERNAL_ERROR_LOG_RETENTION_DAYS", 200, { min: 1, max: 3_650 }),
 };
 const databaseHost = new URL(process.env.DATABASE_URL).hostname;
 const localDatabase = databaseHost === "localhost" || databaseHost === "127.0.0.1";
@@ -84,7 +92,7 @@ function decryptContent(envelope) {
   return Buffer.concat([decipher.update(Buffer.from(ciphertextValue, "base64url")), decipher.final()]).toString("utf8");
 }
 function phoneChangeProof(session) {
-  const expiresAt = Date.now() + 10 * 60_000;
+  const expiresAt = Date.now() + config.phoneChangeProofMinutes * 60_000;
   const payload = `${session.id}:${session.user_id}:${phoneHash(session.phone)}:${expiresAt}`;
   const signature = createHmac("sha256", config.sessionPepper).update(payload).digest("base64url");
   return `${Buffer.from(payload).toString("base64url")}.${signature}`;
@@ -142,7 +150,7 @@ async function refreshSession(request, response, session) {
   const token = parseCookies(request)[config.cookieName];
   if (!token || !session) return;
   const expiresAt = new Date(Date.now() + config.sessionMinutes * 60_000);
-  await db.execute("UPDATE sessions SET last_seen_at = NOW(), expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE id = ?", [session.id]);
+  await db.execute("UPDATE sessions SET last_seen_at = NOW(), expires_at = DATE_ADD(NOW(), INTERVAL ? MINUTE) WHERE id = ?", [config.sessionMinutes, session.id]);
   setSessionCookie(response, token, expiresAt);
 }
 async function sendTencentSms(phone, code) {

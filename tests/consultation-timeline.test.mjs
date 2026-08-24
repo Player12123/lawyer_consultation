@@ -40,7 +40,8 @@ test("consultation renders first-pass tool references once and never injects the
 
   assert.doesNotMatch(page, /fetchReferences/);
   assert.match(page, /<ToolReferences/);
-  assert.match(page, /法条匹配/);
+  assert.match(page, /相关法条/);
+  assert.match(page, /类似案例/);
   assert.doesNotMatch(page, /nextContent = nextContent \+ "\\n\\n—— 相关法条 ——/);
 });
 
