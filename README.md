@@ -10,13 +10,10 @@ app/styles/          当前应用使用的样式模块与设计令牌
 features/            认证、用户、审计、品牌、咨询等业务边界
 db/                  MySQL schema 与不可修改历史的迁移文件
 lib/                 服务端通用能力，例如数据库连接
-scripts/             仅开发环境使用的初始化脚本
-docs/                架构、数据模型和改动流程
-demos/client-preview/给客户评审的独立 HTML 演示，不连接服务端
-tests/               项目结构及未来业务测试
+scripts/             仅开发、验收和安全检查使用的脚本
+docs/                部署、运维、安全、数据模型和交付说明
+tests/               构建、交付契约和核心业务保护测试
 public/              仅运行时需要公开访问的静态资源
-tooling/             构建工具源码，不是构建产物
-worker/              Cloudflare 部署时的请求入口
 ```
 
 ## 根目录中看起来“杂”的文件
@@ -24,10 +21,8 @@ worker/              Cloudflare 部署时的请求入口
 - `package.json` / `package-lock.json`：项目命令与依赖的精确版本清单。
 - `node_modules/`：根据依赖清单自动下载的运行材料；不属于业务代码、不会提交、可随时由 `npm install` 重建。
 - `*.config.ts` / `*.config.mjs`：TypeScript、样式、代码检查、数据库迁移及本地运行的工具配置，必须放在根目录以便工具识别。
-- `.env.local`：仅本机所需的数据库及第三方接口地址/密钥，已忽略，不会提交；程序行为参数写在代码中。
-- `.openai/`：当前托管环境配置。
-- `public/`：仅放浏览器需要直接访问的资源；当前只有站点图标。
-- `worker/`：部署到 Cloudflare 时的服务端请求入口；它不是前端页面。
+- `.env.local`：仅本机所需的数据库及第三方接口地址/密钥，已忽略，不会提交；生产用 `.env.example` 填写。
+- `public/`：仅放浏览器需要直接访问的公开静态资源。
 
 ## 常用命令
 
@@ -42,13 +37,9 @@ npm run db:seed:local   # 初始化本地测试账号
 npm run test:smoke      # 对已启动的本机/部署环境执行无副作用冒烟测试
 ```
 
-生产交付、运维和验收请先阅读 `docs/production-handover.md`；本机验收结果见 `docs/local-acceptance-report.md`。
+生产交付、运维和验收请先阅读 `docs/production-handover.md`；本机验收结果见 `docs/local-acceptance-report.md`。公司部署采用普通 Web 模式：Nginx 反向代理 Web 服务和 API 服务，不依赖第三方托管平台。
 
 ## 客户品牌
 
 客户名称、Logo、登录问候语、咨询问候语和助手名称位于
 `features/brand/client-brand.ts`。现阶段为本地默认配置；上线时应由客户独立入口或部署配置加载。
-
-## 演示文件
-
-将 `demos/client-preview/index.html` 单独发送给客户或同事即可直接浏览。它不访问 MySQL、AI 或短信服务。

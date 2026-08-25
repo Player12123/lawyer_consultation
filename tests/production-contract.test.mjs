@@ -173,17 +173,18 @@ test("documentation does not preserve bootstrap-admin-by-phone instructions", as
   assert.match(resourceRequest, /短信自助登录账号不得作为系统管理员来源/);
 });
 
-test("temporary acceptance exposes only local web port through Quick Tunnel", async () => {
+test("production handover uses ordinary web deployment and forbids direct API exposure", async () => {
   const [handover, apiDeployment] = await Promise.all([
     readFile(new URL("docs/production-handover.md", root), "utf8"),
     readFile(new URL("docs/production-api-deployment.md", root), "utf8"),
   ]);
 
-  assert.match(handover, /cloudflared tunnel --url http:\/\/127\.0\.0\.1:3000/);
-  assert.match(handover, /不得.*8788/);
+  assert.match(handover, /普通 Web 部署模式/);
+  assert.doesNotMatch(handover, /cloudflared tunnel|Quick Tunnel|Cloudflare/);
+  assert.match(handover, /不得暴露 API 8788/);
   assert.match(handover, /MySQL.*不得.*公网/);
-  assert.match(apiDeployment, /Quick Tunnel.*3000/);
-  assert.match(apiDeployment, /API 8788.*不得通过 Quick Tunnel/);
+  assert.doesNotMatch(apiDeployment, /cloudflared|Quick Tunnel|Cloudflare/);
+  assert.match(apiDeployment, /API 8788 不得通过隧道、端口转发或公网代理暴露/);
 });
 
 test("retention and migration safety are part of the release artifact", async () => {
